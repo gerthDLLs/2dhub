@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Labirinto 3D de Texto (Sem CSS)</title>
+</head>
+<body>
+
+    <h1>Labirinto 3D de Texto</h1>
+
+    <div>
+        <div>
+            <pre id="gameOutput"></pre>
+            <pre id="miniMapOutput"></pre>
+        </div>
+    </div>
+
+    <div>
+        <button id="turnLeftBtn">Virar Esquerda (A/Q)</button>
+        <button id="moveForwardBtn">Mover Frente (W)</button>
+        <button id="moveBackwardBtn">Mover Trás (S)</button>
+        <button id="turnRightBtn">Virar Direita (D/E)</button>
+    </div>
+
+    <div>
+        <p>Use as teclas <strong>W</strong> (Frente) e <strong>S</strong> (Trás) para mover.</p>
+        <p>Use <strong>A</strong> (Virar Esquerda), <strong>D</strong> (Virar Direita) ou <strong>Q</strong> (Virar Esquerda), <strong>E</strong> (Virar Direita) para girar.</p>
+        <p>A iluminação do ambiente é simulada pela variação dos caracteres das paredes.</p>
+        <p><strong>Verifique o console do navegador (F12) para mensagens de depuração detalhadas!</strong></p>
+    </div>
+
+    <div id="messageBox"></div>
+
+    <script>
+        // Game configuration
+        const MAP_WIDTH = 15;
+        const MAP_HEIGHT = 15;
+        const SCREEN_WIDTH = 60; // Number of character columns for the view
+        const SCREEN_HEIGHT = 20; // Number of character rows for the view
+        const FOV = Math.PI / 3; // Field of View (60 degrees)
+        const MOVE_SPEED = 0.5; // Movement speed
+        const ROT_SPEED = 0.1;
+        const RENDER_RATE_HZ = 50; // Render rate in Hz set to 50
+        const RENDER_INTERVAL_MS = 1000 / RENDER_RATE_HZ; // Interval in milliseconds
+
+        // Player state
+        let player = {
+            x: 2.5,
+            y: 2.5,
+            angle: Math.PI / 2 // Initial angle (facing right)
+        };
+
+        // Map definition (0 = empty, 1 = wall, 2 = exit)
+        const map = [
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            [1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1],
+            [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1],
+            [1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+            [1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            [1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1],
+            [1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 1], // Exit at (13, 13)
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+        ];
+
+        // DOM elements
+        const gameOutput = document.getElementById('gameOutput');
+        const miniMapOutput = document.getElementById('miniMapOutput');
+        const messageBox = document.getElementById('messageBox');
+
+        // State for keyboard input
+        const keysPressed = {
+            w: false, s: false, a: false, d: false, q: false, e: false
+        };
+
+        /**
+         * Displays a message in the message box.
+         * @param {string} message - The message to display.
+         * @param {boolean} isTemporary - If true, the message will disappear after a few seconds.
+         */
+        function showMessage(message, isTemporary = true) {
+            console.log("Mensagem: " + message); // Log da mensagem
+            messageBox.textContent = message;
+            // No CSS for hidden/visible, so we'll just update text content
+            if (isTemporary) {
+                setTimeout(() => {
+                    messageBox.textContent = ''; // Clear message
+                }, 3000);
+            }
+        }
+
+        /**
+         * Renders the 3D view of the maze using raycasting.
+         */
+        function renderGame() {
+            let screenBuffer = [];
+            for (let y = 0; y < SCREEN_HEIGHT; y++) {
+                screenBuffer[y] = [];
+                for (let x = 0; x < SCREEN_WIDTH; x++) {
+                    screenBuffer[y][x] = ' '; // Initialize with empty space
+                }
+            }
+
+            // Raycasting loop for each column of the screen
+            for (let x = 0; x < SCREEN_WIDTH; x++) {
+                // Calculate ray position and direction
+                const cameraX = 2 * x / SCREEN_WIDTH - 1; // x-coordinate in camera space (-1 to 1)
+                const rayDirX = Math.cos(player.angle) + (-Math.sin(player.angle) * 0.66) * cameraX;
+                const rayDirY = Math.sin(player.angle) + (Math.cos(player.angle) * 0.66) * cameraX;
+
+                // Which box of the map we're in
+                let mapX = Math.floor(player.x);
+                let mapY = Math.floor(player.y);
+
+                // Length of ray from current position to next x or y-side
+                let sideDistX;
+                let sideDistY;
+
+                // Length of ray from one x or y-side to the next x or y-side
+                const deltaDistX = Math.abs(1 / rayDirX);
+                const deltaDistY = Math.abs(1 / rayDirY);
+
+                let stepX;
+                let stepY;
+
+                let hit = 0; // Was there a wall hit?
+                let side; // Was a NS or EW wall hit?
+
+                // Calculate step and initial sideDist
+                if (rayDirX < 0) {
+                    stepX = -1;
+                    sideDistX = (player.x - mapX) * deltaDistX;
+                } else {
+                    stepX = 1;
+                    sideDistX = (mapX + 1.0 - player.x) * deltaDistX;
+                }
+                if (rayDirY < 0) {
+                    stepY = -1;
+                    sideDistY = (player.y - mapY) * deltaDistY;
+                } else {
+                    stepY = 1;
+                    sideDistY = (mapY + 1.0 - player.y) * deltaDistY;
+                }
+
+                // Perform DDA (Digital Differential Analyzer)
+                while (hit === 0) {
+                    // Jump to next map square, OR in x-direction, OR in y-direction
+                    if (sideDistX < sideDistY) {
+                        sideDistX += deltaDistX;
+                        mapX += stepX;
+                        side = 0; // X-side hit
+                    } else {
+                        sideDistY += deltaDistY;
+                        mapY += stepY;
+                        side = 1; // Y-side hit
+                    }
+
+                    // Check if ray has hit a wall or exit
+                    if (map[mapY] && map[mapY][mapX] > 0) {
+                        hit = 1;
+                    }
+                }
+
+                // Calculate distance projected on camera direction (Euclidean distance would give fisheye effect!)
+                let perpWallDist;
+                if (side === 0) {
+                    perpWallDist = (mapX - player.x + (1 - stepX) / 2) / rayDirX;
+                } else {
+                    perpWallDist = (mapY - player.y + (1 - stepY) / 2) / rayDirY;
+                }
+
+                // Calculate height of line to draw on screen
+                const lineHeight = Math.floor(SCREEN_HEIGHT / perpWallDist);
+
+                // Calculate lowest and highest pixel to fill in current stripe
+                const drawStart = Math.floor(-lineHeight / 2 + SCREEN_HEIGHT / 2);
+                const drawEnd = Math.floor(lineHeight / 2 + SCREEN_HEIGHT / 2);
+
+                // Determine character based on distance for lighting effect
+                let charToUse = '██'; // Default for closest walls
+
+                if (map[mapY] && map[mapY][mapX] === 2) {
+                    charToUse = 'XX'; // Exit character remains distinct
+                } else {
+                    // Apply lighting based on distance
+                    if (perpWallDist < 2) {
+                        charToUse = '██'; // Very close, brightest
+                    } else if (perpWallDist < 4) {
+                        charToUse = '▓▓'; // Mid-distance
+                    } else if (perpWallDist < 7) {
+                        charToUse = '▒▒'; // Farther
+                    } else {
+                        charToUse = '░░'; // Very far, darkest
+                    }
+
+                    // Optional: Subtle shading based on wall orientation (X-side vs Y-side)
+                    if (side === 1) { // If it's a Y-side (horizontal wall segment), make it slightly darker
+                        if (charToUse === '██') charToUse = '▓▓';
+                        else if (charToUse === '▓▓') charToUse = '▒▒';
+                        else if (charToUse === '▒▒') charToUse = '░░';
+                    }
+                }
+                
+                // Draw the column
+                for (let y = 0; y < SCREEN_HEIGHT; y++) {
+                    if (y >= drawStart && y <= drawEnd) {
+                        screenBuffer[y][x] = charToUse;
+                    } else {
+                        screenBuffer[y][x] = '░░'; // Floor/Ceiling (always darkest)
+                    }
+                }
+            }
+
+            // Convert buffer to string and display
+            gameOutput.textContent = screenBuffer.map(row => row.join('')).join('\n');
+        }
+
+        /**
+         * Renders the 2D mini-map.
+         */
+        function renderMiniMap() {
+            let miniMapBuffer = [];
+            for (let y = 0; y < MAP_HEIGHT; y++) {
+                miniMapBuffer[y] = [];
+                for (let x = 0; x < MAP_WIDTH; x++) {
+                    if (map[y][x] === 1) {
+                        miniMapBuffer[y][x] = '█'; // Wall
+                    } else if (map[y][x] === 2) {
+                        miniMapBuffer[y][x] = 'X'; // Exit
+                    } else {
+                        miniMapBuffer[y][x] = ' '; // Empty space
+                    }
+                }
+            }
+            // Place player on mini-map
+            const playerMapX = Math.floor(player.x);
+            const playerMapY = Math.floor(player.y);
+            if (playerMapY >= 0 && playerMapY < MAP_HEIGHT && playerMapX >= 0 && playerMapX < MAP_WIDTH) {
+                miniMapBuffer[playerMapY][playerMapX] = 'P'; // Player character
+            }
+
+            miniMapOutput.textContent = miniMapBuffer.map(row => row.join('')).join('\n');
+        }
+
+        /**
+         * Updates player position and angle based on pressed keys.
+         */
+        function updatePlayerState() {
+            let moved = false;
+            let turned = false;
+
+            // Log current player position and keys pressed at the start of update
+            console.log(`[UPDATE] Player Pos: (${player.x.toFixed(2)}, ${player.y.toFixed(2)}) Angle: ${player.angle.toFixed(2)}`);
+            console.log("[UPDATE] Keys Pressed:", { ...keysPressed }); // Log a copy to see state at this moment
+
+            // Movement
+            if (keysPressed.w) { // Move Forward
+                console.log("[MOVE] W key is pressed.");
+                const newX = player.x + Math.cos(player.angle) * MOVE_SPEED;
+                const newY = player.y + Math.sin(player.angle) * MOVE_SPEED;
+                
+                const targetMapX = Math.floor(newX);
+                const targetMapY = Math.floor(newY);
+
+                console.log(`[MOVE] Attempting to move to newX: ${newX.toFixed(2)}, newY: ${newY.toFixed(2)}`);
+                console.log(`[MOVE] Target Map Cell: (${targetMapX}, ${targetMapY})`);
+
+                // Check if the new position is within map bounds and not a wall
+                if (targetMapY >= 0 && targetMapY < MAP_HEIGHT &&
+                    targetMapX >= 0 && targetMapX < MAP_WIDTH) {
+                    if (map[targetMapY][targetMapX] !== 1) { // If not a wall
+                        player.x = newX;
+                        player.y = newY;
+                        moved = true;
+                        console.log(`[MOVE SUCCESS] Moved Forward to (${player.x.toFixed(2)}, ${player.y.toFixed(2)})`);
+                    } else {
+                        showMessage("Você bateu em uma parede!");
+                        console.log(`[COLLISION] Collision detected at map cell (${targetMapX}, ${targetMapY}). Cell value: ${map[targetMapY][targetMapX]}`);
+                    }
+                } else {
+                    showMessage("Você bateu nos limites do mapa!");
+                    console.log(`[OUT OF BOUNDS] Attempted to move out of map bounds to (${targetMapX}, ${targetMapY})`);
+                }
+            }
+            if (keysPressed.s) { // Move Backward
+                console.log("[MOVE] S key is pressed.");
+                const newX = player.x - Math.cos(player.angle) * MOVE_SPEED;
+                const newY = player.y - Math.sin(player.angle) * MOVE_SPEED;
+                
+                const targetMapX = Math.floor(newX);
+                const targetMapY = Math.floor(newY);
+
+                console.log(`[MOVE] Attempting to move to newX: ${newX.toFixed(2)}, newY: ${newY.toFixed(2)}`);
+                console.log(`[MOVE] Target Map Cell: (${targetMapX}, ${targetMapY})`);
+
+                // Check if the new position is within map bounds and not a wall
+                if (targetMapY >= 0 && targetMapY < MAP_HEIGHT &&
+                    targetMapX >= 0 && targetMapX < MAP_WIDTH) {
+                    if (map[targetMapY][targetMapX] !== 1) { // If not a wall
+                        player.x = newX;
+                        player.y = newY;
+                        moved = true;
+                        console.log(`[MOVE SUCCESS] Moved Backward to (${player.x.toFixed(2)}, ${player.y.toFixed(2)})`);
+                    } else {
+                        showMessage("Você bateu em uma parede!");
+                        console.log(`[COLLISION] Collision detected at map cell (${targetMapX}, ${targetMapY}). Cell value: ${map[targetMapY][targetMapX]}`);
+                    }
+                } else {
+                    showMessage("Você bateu nos limites do mapa!");
+                    console.log(`[OUT OF BOUNDS] Attempted to move out of map bounds to (${targetMapX}, ${targetMapY})`);
+                }
+            }
+
+            // Turning
+            if (keysPressed.a || keysPressed.q) { // Turn Left
+                player.angle -= ROT_SPEED;
+                turned = true;
+                console.log(`[TURN] Turned Left. New Angle: ${player.angle.toFixed(2)}`);
+            }
+            if (keysPressed.d || keysPressed.e) { // Turn Right
+                player.angle += ROT_SPEED;
+                turned = true;
+                console.log(`[TURN] Turned Right. New Angle: ${player.angle.toFixed(2)}`);
+            }
+
+            // Normalize angle
+            if (turned) {
+                if (player.angle < 0) player.angle += 2 * Math.PI;
+                if (player.angle >= 2 * Math.PI) player.angle -= 2 * Math.PI;
+            }
+
+            // Check for exit condition after movement
+            if (map[Math.floor(player.y)][Math.floor(player.x)] === 2) {
+                showMessage("Parabéns! Você encontrou a saída!", false);
+            }
+        }
+
+        /**
+         * The main game loop.
+         * Updates player state and calls render functions at the specified RENDER_RATE_HZ.
+         */
+        function gameLoop() {
+            updatePlayerState(); // Update player position/angle based on keys
+            renderGame();        // Render the 3D view
+            renderMiniMap();     // Render the 2D mini-map
+        }
+
+        // Event Listeners for keyboard input
+        document.addEventListener('keydown', (event) => {
+            const key = event.key.toLowerCase();
+            if (keysPressed.hasOwnProperty(key)) {
+                if (!keysPressed[key]) { // Only log if state changes
+                    console.log(`[EVENT] Key Down: ${key}`);
+                }
+                keysPressed[key] = true;
+            }
+        });
+
+        document.addEventListener('keyup', (event) => {
+            const key = event.key.toLowerCase();
+            if (keysPressed.hasOwnProperty(key)) {
+                if (keysPressed[key]) { // Only log if state changes
+                    console.log(`[EVENT] Key Up: ${key}`);
+                }
+                keysPressed[key] = false;
+            }
+        });
+
+        // Event Listeners for buttons (still functional as alternatives)
+        document.getElementById('moveForwardBtn').addEventListener('mousedown', () => { keysPressed.w = true; console.log("[EVENT] Button W Down"); });
+        document.getElementById('moveForwardBtn').addEventListener('mouseup', () => { keysPressed.w = false; console.log("[EVENT] Button W Up"); });
+        document.getElementById('moveForwardBtn').addEventListener('mouseleave', () => { keysPressed.w = false; console.log("[EVENT] Button W Leave"); });
+
+        document.getElementById('moveBackwardBtn').addEventListener('mousedown', () => { keysPressed.s = true; console.log("[EVENT] Button S Down"); });
+        document.getElementById('moveBackwardBtn').addEventListener('mouseup', () => { keysPressed.s = false; console.log("[EVENT] Button S Up"); });
+        document.getElementById('moveBackwardBtn').addEventListener('mouseleave', () => { keysPressed.s = false; console.log("[EVENT] Button S Leave"); });
+
+        document.getElementById('turnLeftBtn').addEventListener('mousedown', () => { keysPressed.a = true; keysPressed.q = true; console.log("[EVENT] Button A/Q Down"); });
+        document.getElementById('turnLeftBtn').addEventListener('mouseup', () => { keysPressed.a = false; keysPressed.q = false; console.log("[EVENT] Button A/Q Up"); });
+        document.getElementById('turnLeftBtn').addEventListener('mouseleave', () => { keysPressed.a = false; keysPressed.q = false; console.log("[EVENT] Button A/Q Leave"); });
+
+        document.getElementById('turnRightBtn').addEventListener('mousedown', () => { keysPressed.d = true; keysPressed.e = true; console.log("[EVENT] Button D/E Down"); });
+        document.getElementById('turnRightBtn').addEventListener('mouseup', () => { keysPressed.d = false; keysPressed.e = false; console.log("[EVENT] Button D/E Up"); });
+        document.getElementById('turnRightBtn').addEventListener('mouseleave', () => { keysPressed.d = false; keysPressed.e = false; console.log("[EVENT] Button D/E Leave"); });
+
+
+        // Start the game loop when the window loads
+        window.onload = function () {
+            setInterval(gameLoop, RENDER_INTERVAL_MS);
+            renderMiniMap(); // Initial mini-map render
+            console.log("Jogo iniciado. Verifique o console (F12) para mensagens de depuração.");
+        };
+    </script>
+</body>
+</html>
