@@ -1,0 +1,23 @@
+body {
+  background: teal;
+  font-family: "MS Sans Serif", sans-serif;
+  padding: 12px;
+  color: black;
+}
+.window {
+  border: 2px outset gray;
+  background: silver;
+  width: 400px;
+  margin: 12px;
+  box-shadow: 2px 2px #000;
+}
+.title-bar {
+  background: navy;
+  color: white;
+  padding: 4px;
+  font-weight: bold;
+}
+.window-body {
+  padding: 8px;
+  background: #c0c0c0;
+}
